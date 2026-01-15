@@ -46,8 +46,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5000",
     "http://127.0.0.1:8000",
-    os.getenv("FRONTEND_URL", ""),
-    os.getenv("RENDER_EXTERNAL_URL", ""),
+    os.getenv("https://techconnect-web.netlify.app", ""),
 ]
 ALLOWED_ORIGINS = [origin for origin in ALLOWED_ORIGINS if origin]
 
@@ -63,7 +62,7 @@ CORS(app, resources={
 
 socketio = SocketIO(
     app, 
-    cors_allowed_origins="*",
+    cors_allowed_origins="https://techconnect-web.netlify.app",
     async_mode='threading',
     ping_timeout=60,
     ping_interval=25,
