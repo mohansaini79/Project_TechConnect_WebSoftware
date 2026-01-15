@@ -41,18 +41,14 @@ limiter = Limiter(
 
 # ✅ CORS Configuration for Production
 ALLOWED_ORIGINS = [
-    "http://localhost:5000",
-    "http://localhost:8000", 
-    "http://localhost:3000",
-    "http://127.0.0.1:5000",
-    "http://127.0.0.1:8000",
-    os.getenv("https://techconnect-web.netlify.app/", ""),
+   
+    os.getenv("https://techconnect-web.netlify.app"),
 ]
 ALLOWED_ORIGINS = [origin for origin in ALLOWED_ORIGINS if origin]
 
 CORS(app, resources={
     r"/*": {
-        "origins": "https://techconnect-web.netlify.app/",  # Allow all origins - tighten in production
+        "origins": ALLOWED_ORIGINS,  # Allow all origins - tighten in production
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True,
@@ -62,7 +58,7 @@ CORS(app, resources={
 
 socketio = SocketIO(
     app, 
-    cors_allowed_origins="https://techconnect-web.netlify.app/",
+    cors_allowed_origins=ALLOWED_ORIGINS,
     async_mode='threading',
     ping_timeout=60,
     ping_interval=25,
