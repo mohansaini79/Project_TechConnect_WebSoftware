@@ -42,7 +42,7 @@ limiter = Limiter(
 # ✅ CORS Configuration for Production
 ALLOWED_ORIGINS = [
    
-    os.getenv("https://techconnect-web.netlify.app"),
+    os.getenv("https://syncspace-web.netlify.app"),
 ]
 ALLOWED_ORIGINS = [origin for origin in ALLOWED_ORIGINS if origin]
 
