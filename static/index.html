@@ -1136,22 +1136,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     if (token && user) {
-        // Check token validity
-        fetch(`${API}/api/dashboard`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        }).then(res => {
-            if (res.status === 401) {
-                logout();
-            } else {
-                showApp();
-                initApp();
-            }
-        }).catch(() => {
-            showApp();
-            initApp();
-        });
+    fetch(`${API}/api/dashboard`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    })
+    .then(res => {
+        if (res.status === 401) {
+            console.warn("🔐 Token expired or invalid");
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('currentUser');
+            showAuth();   // login screen dikhao
+            return;
+        }
+
+        if (!res.ok) {
+            throw new Error("Server error");
+        }
+
+        showApp();
+        initApp();
+    })
+    .catch(err => {
+        console.error("⚠️ Dashboard check failed:", err);
+        showAuth();   // backend down ho to bhi app crash na ho
+    });
+} else {
+    showAuth(); // token hi nahi hai
     }
-});
 
 // ==================== AUTH FUNCTIONS ====================
 function toggleAuth(form) {
