@@ -1053,7 +1053,7 @@ def server_error(e):
 # RUN
 # ========================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 10000))
     print(f"🚀 GitConnect Server running on http://localhost:{port}")
     print(f"📊 Features: All datetime issues FIXED for Python 3.13")
     print(f"✅ MongoDB Atlas connected | Login system working")
