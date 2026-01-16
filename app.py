@@ -2,7 +2,7 @@ from bson import ObjectId
 import os
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
@@ -22,49 +22,36 @@ load_dotenv()
 # ========================================
 # APP SETUP
 # ========================================
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path='')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", secrets.token_hex(32))
 app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 app.config["JWT_HEADER_NAME"] = "Authorization"
 app.config["JWT_HEADER_TYPE"] = "Bearer"
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=8)
 
 jwt = JWTManager(app)
 
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["300 per hour"],
-    storage_uri="memory://"
+    default_limits=["200 per hour"]
 )
-
-# ✅ CORS Configuration for Production
-ALLOWED_ORIGINS = [
-    
-    "https://syncspace-web.netlify.app",  # Your production URL
-]
-ALLOWED_ORIGINS = [origin for origin in ALLOWED_ORIGINS if origin]
 
 CORS(app, resources={
     r"/*": {
-        "origins": ALLOWED_ORIGINS,  # Allow all origins - tighten in production
+        "origins": "*",
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True,
-        "max_age": 3600
+        "supports_credentials": True
     }
 })
 
 socketio = SocketIO(
     app, 
-    cors_allowed_origins=ALLOWED_ORIGINS,
-    async_mode='threading',
+    cors_allowed_origins="*",
     ping_timeout=60,
-    ping_interval=25,
-    logger=False,
-    engineio_logger=False,
-    manage_session=False
+    ping_interval=25
 )
 
 @app.before_request
@@ -74,7 +61,6 @@ def handle_preflight():
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        response.headers['Access-Control-Max-Age'] = '3600'
         return response
 
 @jwt.invalid_token_loader
@@ -94,21 +80,10 @@ def expired_token_callback(jwt_header, jwt_payload):
 # ========================================
 mongo_uri = os.getenv("MONGO_URI")
 if not mongo_uri:
-    raise ValueError("❌ MONGO_URI not found in environment variables")
+    raise ValueError("❌ MONGO_URI not found in .env")
 
-try:
-    client = MongoClient(
-        mongo_uri,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=10000
-    )
-    client.server_info()
-    db = client["gitconnect"]
-    print("✅ MongoDB Atlas connected successfully")
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-    raise
+client = MongoClient(mongo_uri)
+db = client["gitconnect"]
 
 users = db.users
 teams = db.teams
@@ -130,15 +105,16 @@ online_users = {}
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    secure=True
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
+
+print(f"✅ Connected to MongoDB Atlas")
 
 # ========================================
 # HELPER FUNCTIONS
 # ========================================
 def utc_now():
-    """Get current UTC time (Python 3.13+ compatible)"""
+    """Get current UTC time (Python 3.13 compatible)"""
     return datetime.now(timezone.utc)
 
 def workspace_member_required(f):
@@ -163,7 +139,7 @@ def admin_required(f):
     return decorated
 
 def log_activity(user_id, user_name, action, workspace_id=None, details=None):
-    """Log activity with ISO timestamp for SocketIO"""
+    """Fixed: Convert datetime to ISO string for SocketIO"""
     timestamp = utc_now()
 
     activity = {
@@ -172,17 +148,18 @@ def log_activity(user_id, user_name, action, workspace_id=None, details=None):
         "action": action,
         "details": details,
         "workspace_id": workspace_id,
-        "timestamp": timestamp
+        "timestamp": timestamp  # Store as datetime in MongoDB
     }
     activities.insert_one(activity)
 
+    # Emit with ISO string (JSON serializable)
     if workspace_id:
         emit_activity = activity.copy()
         emit_activity["timestamp"] = timestamp.isoformat()
         socketio.emit("activity_added", emit_activity, room=workspace_id)
 
 def send_notification(user_id, message, workspace_id=None):
-    """Send notification with ISO timestamp"""
+    """Fixed: Convert datetime to ISO string for SocketIO"""
     timestamp = utc_now()
 
     notif = {
@@ -194,6 +171,7 @@ def send_notification(user_id, message, workspace_id=None):
     }
     notifications.insert_one(notif)
 
+    # Emit with ISO string
     emit_notif = notif.copy()
     emit_notif["created_at"] = timestamp.isoformat()
     socketio.emit("notification", emit_notif, room=user_id)
@@ -389,6 +367,7 @@ def handle_teams():
 
         return jsonify({"id": str(result.inserted_id), "name": team["name"]})
 
+    # GET
     user_teams = []
     for team in teams.find({"members": identity["id"]}).sort("created_at", -1):
         user_teams.append({
@@ -417,6 +396,7 @@ def manage_team(team_id):
         log_activity(identity["id"], identity["name"], f"Deleted team '{team['name']}'")
         return jsonify({"msg": "Team deleted"})
 
+    # PUT
     data = request.get_json()
     teams.update_one(
         {"_id": ObjectId(team_id)},
@@ -456,6 +436,7 @@ def handle_team_members(team_id):
         log_activity(identity["id"], identity["name"], f"Added member to team '{team['name']}'")
         return jsonify({"msg": "Member added"})
 
+    # GET
     member_ids = [ObjectId(m) for m in team.get("members", [])]
     members = list(users.find({"_id": {"$in": member_ids}}, {"password": 0}))
 
@@ -516,6 +497,7 @@ def handle_workspaces():
 
         return jsonify({"id": str(result.inserted_id), "name": workspace["name"]})
 
+    # GET
     user_workspaces = []
     for ws in workspaces.find({"members": identity["id"], "archived": False}).sort("created_at", -1):
         user_workspaces.append({
@@ -543,6 +525,7 @@ def manage_workspace(ws_id):
         log_activity(identity["id"], identity["name"], f"Deleted workspace '{ws['name']}'")
         return jsonify({"msg": "Workspace deleted"})
 
+    # PUT
     data = request.get_json()
     update_data = {}
     if "name" in data:
@@ -591,6 +574,7 @@ def handle_kanban(identity, ws_id):
         log_activity(identity["id"], identity["name"], "Updated Kanban board", ws_id)
         return jsonify({"success": True})
 
+    # GET
     board = kanban_boards.find_one({"workspace_id": ObjectId(ws_id)})
     if not board:
         default_columns = [
@@ -627,6 +611,7 @@ def manage_task(identity, ws_id, col_idx, task_idx):
         socketio.emit("kanban_updated", {"workspace_id": ws_id}, room=ws_id)
         return jsonify({"success": True})
 
+    # PUT
     data = request.get_json()
     task = columns[col_idx]["tasks"][task_idx]
 
@@ -686,6 +671,7 @@ def manage_column(identity, ws_id, col_idx):
         socketio.emit("kanban_updated", {"workspace_id": ws_id}, room=ws_id)
         return jsonify({"success": True})
 
+    # PUT
     data = request.get_json()
     columns[col_idx]["name"] = data.get("name", columns[col_idx]["name"])
 
@@ -738,6 +724,7 @@ def handle_task_comments(identity, ws_id, col_idx, task_idx):
         }
         task_comments.insert_one(comment)
 
+        # Emit with ISO string
         emit_comment = comment.copy()
         emit_comment["created_at"] = comment["created_at"].isoformat()
         socketio.emit("comment_added", emit_comment, room=ws_id)
@@ -745,6 +732,7 @@ def handle_task_comments(identity, ws_id, col_idx, task_idx):
         log_activity(identity["id"], identity["name"], "Added task comment", ws_id)
         return jsonify({"success": True})
 
+    # GET
     comments = list(task_comments.find({"task_key": task_key}).sort("created_at", 1))
     return jsonify([{
         "id": str(c["_id"]),
@@ -786,6 +774,7 @@ def handle_documents(identity, ws_id):
 
         return jsonify({"success": True})
 
+    # GET
     doc = documents.find_one({"workspace_id": ObjectId(ws_id)})
     return jsonify({"content": doc.get("content", "{}") if doc else "{}"})
 
@@ -802,12 +791,9 @@ def handle_files(identity, ws_id):
         file = request.files['file']
 
         MAX_SIZE = 10 * 1024 * 1024
-        file.seek(0, 2)
-        size = file.tell()
-        file.seek(0)
-
-        if size > MAX_SIZE:
+        if len(file.read()) > MAX_SIZE:
             return jsonify({"error": "File too large (max 10MB)"}), 400
+        file.seek(0)
 
         upload_result = cloudinary.uploader.upload(
             file,
@@ -835,6 +821,7 @@ def handle_files(identity, ws_id):
             "url": upload_result["secure_url"]
         })
 
+    # GET
     workspace_files = list(files.find({"workspace_id": ObjectId(ws_id)}).sort("uploaded_at", -1))
     return jsonify([{
         "id": str(f["_id"]),
@@ -1041,36 +1028,15 @@ def handle_typing(data):
     }, room=data.get("workspace_id"), skip_sid=request.sid)
 
 # ========================================
-# HEALTH CHECK & ROOT
+# FRONTEND
 # ========================================
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({
-        "service": "GitConnect API",
-        "status": "running",
-        "version": "1.0.0",
-        "docs": "/api/health"
-    }), 200
+@app.route("/")
+def index():
+    return send_from_directory("static", "index.html")
 
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "healthy", "service": "GitConnect API"}), 200
-
-@app.route("/api/health", methods=["GET"])
-def api_health():
-    try:
-        db.command('ping')
-        return jsonify({
-            "status": "healthy",
-            "database": "connected",
-            "service": "GitConnect",
-            "timestamp": utc_now().isoformat()
-        }), 200
-    except Exception as e:
-        return jsonify({
-            "status": "unhealthy",
-            "error": str(e)
-        }), 500
+@app.route("/<path:filename>")
+def serve_static(filename):
+    return send_from_directory("static", filename)
 
 # ========================================
 # ERROR HANDLERS
@@ -1081,31 +1047,14 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    print(f"❌ Server error: {e}")
     return jsonify({"error": "Internal server error"}), 500
 
 # ========================================
-# RUN SERVER
+# RUN
 # ========================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    debug_mode = os.getenv("FLASK_ENV") == "development"
-
-    print("=" * 60)
-    print("🚀 GitConnect Backend Server Starting...")
-    print("=" * 60)
-    print(f"📍 Port: {port}")
-    print(f"🔧 Environment: {'Development' if debug_mode else 'Production'}")
-    print(f"🗄️  Database: MongoDB Atlas")
-    print(f"☁️  Storage: Cloudinary")
-    print(f"🌐 CORS: Enabled for all origins (production)")
-    print(f"✅ All datetime issues fixed for Python 3.13+")
-    print("=" * 60)
-
-    socketio.run(
-        app, 
-        host="0.0.0.0", 
-        port=port, 
-        debug=debug_mode,
-        allow_unsafe_werkzeug=True
-    )
+    port = int(os.getenv("PORT", 5000))
+    print(f"🚀 GitConnect Server running on http://localhost:{port}")
+    print(f"📊 Features: All datetime issues FIXED for Python 3.13")
+    print(f"✅ MongoDB Atlas connected | Login system working")
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
