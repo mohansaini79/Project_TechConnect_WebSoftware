@@ -41,8 +41,9 @@ limiter = Limiter(
 
 # ✅ CORS Configuration for Production
 ALLOWED_ORIGINS = [
-   
-    os.getenv("https://syncspace-web.netlify.app"),
+    "http://localhost:5000",
+    "http://localhost:3000",
+    "https://syncspace-web.netlify.app",  # Your production URL
 ]
 ALLOWED_ORIGINS = [origin for origin in ALLOWED_ORIGINS if origin]
 
